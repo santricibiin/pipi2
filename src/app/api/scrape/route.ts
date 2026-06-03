@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { resolveAuth } from '@/lib/auth'
 import { prisma } from '@/lib/prisma'
 import { getChannel, isRunning, setRunning, broadcast, broadcastEvent } from '@/lib/sse'
+import { scrapeOrdersDirect } from '@/lib/scraper/shopee-api'
 import { parseAmount } from '@/lib/utils'
 
 export async function POST(request: Request) {
@@ -19,8 +20,6 @@ export async function POST(request: Request) {
     limit?: number
     maxPages?: number
     concurrency?: number
-    show?: boolean
-    blockResources?: boolean
     mode?: 'api' | 'browser'
   } = {}
   try {
@@ -32,11 +31,7 @@ export async function POST(request: Request) {
   setRunning(channel, true)
 
   const job = await prisma.scrapeJob.create({
-    data: {
-      userId,
-      status: 'running',
-      config: body as object,
-    },
+    data: { userId, status: 'running', config: body as object },
   })
 
   runScrape(body, channel, userId, job.id).catch((e) => {
@@ -55,13 +50,6 @@ async function runScrape(
   jobId: number
 ) {
   const log = (line: string) => broadcast(channel, line)
-  const orderType = body.type || 'completed'
-  const mode = body.mode === 'browser' ? 'browser' : 'api'
-  const maxPages = body.maxPages || 0
-  const limit = body.limit || 0
-  const concurrency = body.concurrency || (mode === 'api' ? 8 : 4)
-
-  log(`[web] ▶️  mulai scrape (${mode === 'api' ? 'API cepat' : 'browser'}) — type=${orderType} halaman=${maxPages || 'all'} limit=${limit || 'all'} concurrency=${concurrency}`)
 
   // Get the user's latest cookie
   const cookie = await prisma.cookie.findFirst({
@@ -75,73 +63,44 @@ async function runScrape(
     return
   }
 
-  log('[web] 🍪 cookies ditemukan, memulai proses...')
+  log('[web] 🍪 cookies ditemukan, memulai scrape via API...')
 
-  // Simulate scrape process with demo data for now
-  // In production, this would call the actual Shopee API scraper
-  const demoOrders = generateDemoOrders(orderType, limit || 5)
-
-  for (let i = 0; i < demoOrders.length; i++) {
-    await new Promise((r) => setTimeout(r, 300))
-    const order = demoOrders[i]
-    const total = parseAmount(order.total?.amount)
-
-    await prisma.order.create({
-      data: {
-        userId,
-        orderId: order.orderId || `ORD-${Date.now()}-${i}`,
-        products: order.products as object,
-        paymentBreakdown: order.paymentBreakdown as object,
-        total,
-      },
+  try {
+    const result = await scrapeOrdersDirect(cookie.content, {
+      orderType: body.type || 'completed',
+      limit: body.limit || 0,
+      maxPages: body.maxPages || 0,
+      concurrency: body.concurrency || 8,
+      log,
     })
 
-    log(`[web] 📦 pesanan ${i + 1}/${demoOrders.length}: ${order.orderId} — ${order.products?.length || 0} produk`)
-  }
-
-  log(`[web] ✅ selesai — ${demoOrders.length} pesanan tersimpan`)
-  broadcastEvent(channel, 'done', { scraped: demoOrders.length })
-
-  await prisma.scrapeJob.update({
-    where: { id: jobId },
-    data: { status: 'done', finishedAt: new Date() },
-  })
-}
-
-function generateDemoOrders(type: string, count: number) {
-  const products = [
-    { name: 'Kaos Polos Premium', variation: 'Variasi: hitam,XL', code: 'KP-BLK-XL', subtotal: 'Rp89.000', qty: '2' },
-    { name: 'Celana Jogger Slim', variation: 'Variasi: navy,L', code: 'CJ-NV-L', subtotal: 'Rp125.000', qty: '1' },
-    { name: 'Hoodie Oversize', variation: 'Variasi: cream,M', code: 'HO-CRM-M', subtotal: 'Rp189.000', qty: '1' },
-    { name: 'Topi Baseball Cap', variation: 'Variasi: putih', code: 'TB-WHT', subtotal: 'Rp45.000', qty: '3' },
-    { name: 'Tas Selempang Mini', variation: 'Variasi: coklat', code: 'TS-BRN', subtotal: 'Rp78.000', qty: '1' },
-  ]
-
-  const orders = []
-  for (let i = 0; i < count; i++) {
-    const numProducts = 1 + Math.floor(Math.random() * 3)
-    const orderProducts = []
-    let gross = 0
-    for (let j = 0; j < numProducts; j++) {
-      const p = products[(i + j) % products.length]
-      orderProducts.push(p)
-      gross += parseAmount(p.subtotal) * (parseInt(p.qty) || 1)
+    // Save orders to database
+    let saved = 0
+    for (const detail of result.details) {
+      const total = detail.total ? parseAmount(detail.total.amount) : 0
+      await prisma.order.create({
+        data: {
+          userId,
+          orderId: detail.orderSn || detail.pathId,
+          products: detail.products as object,
+          paymentBreakdown: detail.paymentBreakdown as object,
+          total,
+          rawJson: detail as object,
+        },
+      })
+      saved++
     }
-    const adminFee = Math.round(gross * 0.04)
-    const serviceFee = Math.round(gross * 0.02)
-    const insurance = 1500
-    const net = gross - adminFee - serviceFee - insurance - 1250
 
-    orders.push({
-      orderId: `${Date.now().toString(36).toUpperCase()}${i.toString(36).toUpperCase()}`,
-      products: orderProducts,
-      paymentBreakdown: [
-        { label: 'Biaya Administrasi', amount: `-Rp${adminFee.toLocaleString('id-ID')}` },
-        { label: 'Biaya Layanan', amount: `-Rp${serviceFee.toLocaleString('id-ID')}` },
-        { label: 'Premi', amount: `-Rp${insurance.toLocaleString('id-ID')}` },
-      ],
-      total: { amount: `Rp${net.toLocaleString('id-ID')}` },
-    })
+    log(`[web] ✅ selesai — ${saved} pesanan tersimpan ke database`)
+    broadcastEvent(channel, 'done', { scraped: saved })
+    await prisma.scrapeJob.update({ where: { id: jobId }, data: { status: 'done', finishedAt: new Date() } })
+  } catch (e: any) {
+    const msg = e instanceof Error ? e.message : String(e)
+    if (e?.authFailed) {
+      log('[web] ❌ cookies kedaluwarsa / tidak valid. Export ulang cookies dari browser lalu upload lagi.')
+    } else {
+      log(`[web] 💥 error: ${msg}`)
+    }
+    await prisma.scrapeJob.update({ where: { id: jobId }, data: { status: 'error', finishedAt: new Date() } })
   }
-  return orders
 }
