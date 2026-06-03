@@ -1,0 +1,109 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        Int       @id @default(autoincrement())
+  token     String    @unique @db.VarChar(128)
+  label     String    @default("") @db.VarChar(100)
+  role      String    @default("guest") @db.VarChar(20)
+  createdAt DateTime  @default(now())
+  lastSeen  DateTime?
+
+  sessions  Session[]
+  cookies   Cookie[]
+  orders    Order[]
+  products  Product[]
+  logs      ScrapeLog[]
+  jobs      ScrapeJob[]
+}
+
+model Session {
+  id           Int      @id @default(autoincrement())
+  userId       Int
+  shopName     String   @default("") @db.VarChar(200)
+  storageState Json
+  userAgent    String   @db.Text
+  capturedAt   DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model Cookie {
+  id         Int      @id @default(autoincrement())
+  userId     Int
+  content    String   @db.LongText
+  uploadedAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model Order {
+  id               Int      @id @default(autoincrement())
+  userId           Int
+  orderId          String   @default("") @db.VarChar(100)
+  products         Json
+  paymentBreakdown Json?
+  total            Int      @default(0)
+  rawJson          Json?
+  scrapedAt        DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([orderId])
+}
+
+model Product {
+  id        Int    @id @default(autoincrement())
+  userId    Int
+  key       String @db.VarChar(500)
+  name      String @default("") @db.VarChar(300)
+  variation String @default("") @db.VarChar(300)
+  color     String @default("") @db.VarChar(100)
+  size      String @default("") @db.VarChar(100)
+  sku       String @default("") @db.VarChar(100)
+  qty       Int    @default(0)
+  hpp       Int    @default(0)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, key])
+  @@index([userId])
+}
+
+model ScrapeLog {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  message   String   @db.Text
+  level     String   @default("info") @db.VarChar(20)
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([createdAt])
+}
+
+model ScrapeJob {
+  id         Int       @id @default(autoincrement())
+  userId     Int
+  status     String    @default("running") @db.VarChar(20)
+  config     Json?
+  startedAt  DateTime  @default(now())
+  finishedAt DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([status])
+}
