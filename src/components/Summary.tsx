@@ -36,6 +36,7 @@ export default function Summary({ refreshKey }: { refreshKey: number }) {
     { label: 'Asuransi', value: s.insurance },
     { label: 'Layanan', value: s.serviceFee },
     { label: 'Proses', value: s.processingFee },
+    { label: 'Komisi AMS', value: s.amsCommission, sub: s.amsOrderCount > 0 ? `${s.amsOrderCount} pesanan` : '' },
   ]
 
   return (
@@ -67,7 +68,7 @@ export default function Summary({ refreshKey }: { refreshKey: number }) {
         </div>
 
         {/* Breakdown */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 mt-4">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2.5 mt-4">
           {fees.map((item) => (
             <div key={item.label} className="bg-gray-50 rounded-xl p-3 border border-border">
               <div className="text-[11px] font-medium text-muted">{item.label}</div>
@@ -75,13 +76,6 @@ export default function Summary({ refreshKey }: { refreshKey: number }) {
             </div>
           ))}
         </div>
-
-        {s.amsCommission > 0 && (
-          <div className="mt-3 bg-orange-50 border border-orange-200 rounded-xl p-3 inline-block">
-            <div className="text-[11px] font-medium text-orange-600">Komisi AMS ({s.amsOrderCount} pesanan)</div>
-            <div className="text-base font-bold text-orange-700 mt-1 tabular-nums">{rp(s.amsCommission)}</div>
-          </div>
-        )}
       </div>
     </div>
   )
